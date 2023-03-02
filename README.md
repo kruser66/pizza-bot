@@ -52,15 +52,15 @@ python pizza_bot.py
 
 - Загрузка списка товаров:
 ```bash
-python loaddata -m menu.json
+python example -m menu.json
 ```
 - Загрузка адресов пиццерий:
 ```bash
-python loaddata -a addresses.json
+python example -a addresses.json
 ```
 - Удаление справочников из базы
 ```bash
-python loaddata -d
+python example -d
 ```
 
 # Цель проекта

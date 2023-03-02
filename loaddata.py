@@ -29,7 +29,7 @@ def create_parser():
 
 
 def upload_menu(access_token):
-    with open('menu.json', 'rb') as f:
+    with open('example/menu.json', 'rb') as f:
         menu = json.load(f)
 
     for item in menu:
@@ -56,7 +56,7 @@ def upload_addresses(access_token):
         print('Flow "address" уже загружен. Удалите данные перед повторной загрузкой')
         return
 
-    with open('addresses.json', 'rb') as f:
+    with open('example/addresses.json', 'rb') as f:
         addresses = json.load(f)
 
     for address in addresses:
