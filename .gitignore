@@ -1,0 +1,8 @@
+.env
+*.pyc
+*.json
+
+.idea/
+venv/
+state.*
+images/
