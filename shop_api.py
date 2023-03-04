@@ -375,6 +375,20 @@ def create_entries(access_token, flow_slug, entry):
     return response.json()['data']
 
 
+def fetch_entries(access_token, flow_slug):
+    url_api = f'https://api.moltin.com/v2/flows/{flow_slug}/entries'
+
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    response = requests.get(url_api, headers=headers)
+    response.raise_for_status()
+
+    return response.json()['data']
+
+
 if __name__ == '__main__':
 
     env = Env()
@@ -386,6 +400,7 @@ if __name__ == '__main__':
     token = client_credentials_access_token(client_id, client_secret)
 
     access_token = token['access_token']
+    pprint(fetch_entries(access_token, 'pizzerias'))
 
     #
     # products = fetch_products(access_token)

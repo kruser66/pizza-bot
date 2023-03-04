@@ -5,9 +5,9 @@ import requests
 from textwrap import dedent
 from datetime import datetime
 from environs import Env
-from functools import wraps
+from geopy.distance import distance
 from email_validate import validate
-from urllib.parse import unquote, urlsplit, urlparse
+from urllib.parse import unquote, urlparse
 from telegram import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -15,14 +15,12 @@ from telegram import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove
 )
-
-from telegram.constants import CHATACTION_TYPING, CHATACTION_UPLOAD_PHOTO
 from telegram.ext import Filters, Updater
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
 from shop_api import (
     fetch_products, get_product_by_id, client_credentials_access_token, take_product_image_description,
-    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, add_customer
+    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, add_customer, fetch_entries
 )
 from pprint import pprint
 
@@ -30,6 +28,7 @@ from pprint import pprint
 logger = logging.getLogger(__name__)
 
 IMAGES = 'images'
+MENU_STEP = 7
 
 
 def fetch_coordinates(apikey, address):
@@ -40,9 +39,9 @@ def fetch_coordinates(apikey, address):
         "format": "json",
     })
     response.raise_for_status()
-    try:
-        found_places = response.json()['response']['GeoObjectCollection']['featureMember']
-    except (KeyError, AttributeError):
+
+    found_places = response.json()['response']['GeoObjectCollection']['featureMember']
+    if not found_places:
         return None
 
     most_relevant = found_places[0]
@@ -60,15 +59,46 @@ def download_image(image_url, image_name):
     return response.ok
 
 
-def build_main_menu(access_token, chat_id, products):
+def build_main_menu(access_token, chat_id, products, start):
+
+    with shelve.open('state') as db:
+        db[f'{str(chat_id)}_start'] = start
+
     keyboard = []
-    for product in products:
+    for product in products[start:start + MENU_STEP]:
         keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
+
+    keyboard.append(
+            [InlineKeyboardButton(' << ', callback_data='prev'), InlineKeyboardButton(' >> ', callback_data='next')],
+    )
+
     items = get_cart_items(access_token, chat_id)
     if items:
         keyboard.append([InlineKeyboardButton(f'Корзина ({len(items)})', callback_data='Корзина')])
 
     return keyboard
+
+
+def menu_pagination(access_token, query, chat_id):
+    products = fetch_products(access_token)
+    with shelve.open('state') as db:
+        old_start = db[f'{str(chat_id)}_start']
+    if query.data == 'next':
+        new_start = old_start if (old_start + MENU_STEP) > len(products) else old_start + MENU_STEP
+    else:
+        new_start = 0 if (old_start - MENU_STEP) < 0 else old_start - MENU_STEP
+    with shelve.open('state') as db:
+        db[f'{str(chat_id)}_start'] = new_start
+
+    if old_start == new_start:
+        if new_start:
+            query.answer('Конец списка')
+        else:
+            query.answer('Начало списка')
+    else:
+        keyboard = build_main_menu(access_token, chat_id, products, new_start)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_reply_markup(reply_markup=reply_markup)
 
 
 def build_product_menu(access_token, chat_id, product_id):
@@ -88,7 +118,7 @@ def start(update, context):
     chat_id = update.message.chat_id
 
     products = fetch_products(access_token)
-    keyboard = build_main_menu(access_token, chat_id, products)
+    keyboard = build_main_menu(access_token, chat_id, products, start=0)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     update.message.reply_text(text='Выберите продукт:', reply_markup=reply_markup)
@@ -100,6 +130,11 @@ def product_detail(update, context):
     access_token = update_token(context)
     query = update.callback_query
     chat_id = query.message.chat_id
+
+    if query.data in ['next', 'prev']:
+        menu_pagination(access_token, query, chat_id)
+        return 'HANDLE_MENU'
+
     product_id = query.data
     context.user_data['product_id'] = product_id
 
@@ -153,7 +188,7 @@ def product_order(update, context):
     if query.data == 'Назад':
 
         products = fetch_products(access_token)
-        keyboard = build_main_menu(access_token, chat_id, products)
+        keyboard = build_main_menu(access_token, chat_id, products, 0)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         context.bot.send_message(
@@ -191,7 +226,7 @@ def show_cart(update, context):
     if query.data == 'В меню':
 
         products = fetch_products(access_token)
-        keyboard = build_main_menu(access_token, chat_id, products)
+        keyboard = build_main_menu(access_token, chat_id, products, 0)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         context.bot.send_message(
@@ -244,7 +279,8 @@ def show_cart(update, context):
     return 'HANDLE_CART'
 
 
-def start_payment(update, context):
+def request_address(update, context):
+
     if update.message:
         chat_id = update.message.chat_id
     elif update.callback_query:
@@ -267,31 +303,96 @@ def fetch_address(update, context):
 
     if not update.message.text:
         location = update.message.location
-        address = (location['longitude'], location['latitude'])
+        coords_address = (location['longitude'], location['latitude'])
     else:
         address_text = update.message.text
-        address = fetch_coordinates(api_key, address_text)
+        coords_address = fetch_coordinates(api_key, address_text)
 
-    update.message.reply_text(
-        text=f'Вы ввели адрес: {address}',
-        # reply_markup=ReplyKeyboardRemove
-    )
+    if not coords_address:
+        keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-    # if update.message:
-    #     chat_id = update.message.chat_id
-    # elif update.callback_query:
-    #     chat_id = update.callback_query.message.chat_id
-    #
-    # keyboard = [[KeyboardButton('Отправить номер телефона', request_contact=True)]]
-    # reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    #
-    # context.bot.send_message(
-    #     chat_id=chat_id,
-    #     text='Введите адрес доставки или отправьте местоположение.',
-    #     reply_markup=reply_markup
-    # )
-    #
-    # return 'HANDLE_EMAIL'
+        update.message.reply_text(
+            text=dedent('''
+                Не удалось распознать адрес! 🤷‍♂️
+
+                Введите повторно адрес доставки или отправьте местоположение.
+            '''),
+            reply_markup=reply_markup
+        )
+        return 'HANDLE_ADDRESS'
+
+    else:
+        access_token = update_token(context)
+        pizzerias = fetch_entries(access_token, 'pizzerias')
+
+        distances = [
+            (
+                pizzeria['address'],
+                round(distance(coords_address, (pizzeria['longitude'], pizzeria['latitude'])).km, 1)
+            ) for pizzeria in pizzerias
+        ]
+
+        nearest_pizzeria_address, nearest_pizzeria_distance = min(distances, key=lambda item: item[1])
+
+        if nearest_pizzeria_distance <= 0.5:
+            text = dedent(f'''
+                Можете забрать пиццу из нашей пиццерии неподалеку?
+
+                Она всего {int(nearest_pizzeria_distance*1000)} метрах от Вас.
+                Вот ее адрес: {nearest_pizzeria_address}.
+                
+                А можем и бесплатно доставить - нам не сложно.
+            ''')
+            delivery_option = True
+            delivery_price = 0
+
+        elif nearest_pizzeria_distance <= 5.0:
+            text = dedent(f'''
+                О, Вы не так далеко. Ближайшая пиццерия находится по адресу: {nearest_pizzeria_address}
+                Доставка будет стоить 100 рублей.
+
+                Доставляем или самовывоз?
+            ''')
+            delivery_option = True
+            delivery_price = 100
+
+        elif nearest_pizzeria_distance <= 20.0:
+            text = dedent(f'''
+                Ближайшая к Вам пиццерия довольно далеко: {nearest_pizzeria_distance}. 
+                Доставка будет 300 рублей.
+                
+                Доставляем или самовывоз?
+            ''')
+            delivery_option = True
+            delivery_price = 300
+
+        else:
+            text = dedent(f'''
+                Простите, но так далеко пиццу не доставляем!
+                
+                Ближайшая до Вас пиццерия в {nearest_pizzeria_distance} км.
+                Можете забрать сами, если сможете 😁
+            ''')
+            delivery_price = None
+            delivery_option = False
+
+        context.user_data['delivery'] = (nearest_pizzeria_address, delivery_price)
+
+        keyboard = [
+            [InlineKeyboardButton('Доставка', callback_data='Доставка')],
+            [InlineKeyboardButton('Я передумал', callback_data='Отмена')]
+        ]
+        if delivery_option:
+            keyboard.insert(1, [InlineKeyboardButton('Самовывоз', callback_data='Самовывоз')])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        update.message.reply_text(
+            text=text,
+            reply_markup=reply_markup
+        )
+
+        return 'HANDLE_DELIVERY'
 
 
 def echo_email(update, context):
@@ -308,7 +409,7 @@ def echo_email(update, context):
         return 'PAYMENT'
     else:
         update.message.reply_text(text=f'Адрес: {email} некорректный. Повторите ввод!')
-        return 'HANDLE_EMAIL'
+        return 'HANDLE_ADDRESS'
 
 
 def handle_users_reply(update, context):
@@ -325,7 +426,7 @@ def handle_users_reply(update, context):
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
     elif user_reply == 'Оплатить':
-        user_state = 'START_PAYMENT'
+        user_state = 'HANDLE_PAYMENT'
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
@@ -335,7 +436,7 @@ def handle_users_reply(update, context):
         'HANDLE_MENU': product_detail,
         'HANDLE_DESCRIPTION': product_order,
         'HANDLE_CART': show_cart,
-        'START_PAYMENT': start_payment,
+        'HANDLE_PAYMENT': request_address,
         'HANDLE_ADDRESS': fetch_address,
         'HANDLE_EMAIL': echo_email
     }
