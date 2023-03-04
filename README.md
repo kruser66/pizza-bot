@@ -54,10 +54,15 @@ python pizza_bot.py
 ```bash
 python example -m menu.json
 ```
-- Загрузка адресов пиццерий:
+- Загрузка адресов пиццерий (адреса можно дополнить ключом `telegram_id` для работы уведомлений):
 ```bash
 python example -a addresses.json
 ```
+Для тестирования доставки уведомлений используйте свой номер `telegram_id` и параметр `-tg`
+```bash
+python example -a addresses.json -tg 123456789
+```
+- 
 - Удаление справочников из базы
 ```bash
 python example -d

@@ -23,6 +23,7 @@ def create_parser():
     )
     parser.add_argument('-m', '--menu', nargs='?', help='json-файл со справочником меню')
     parser.add_argument('-a', '--addr', nargs='?', help='json-файл со справочником адресов ресторана')
+    parser.add_argument('-tg', '--tg_id', nargs='?', help='Тестовый телеграм ID для отправки уведомлений по доставке')
     parser.add_argument('-d', action='store_true', help='удалить справочники из базы')
 
     return parser
@@ -44,12 +45,13 @@ def create_pizzerias_flow(access_token):
         'alias': 'string',
         'longitude': 'float',
         'latitude': 'float',
+        'telegram_id': 'integer'
     }
     flow = create_flow(access_token, flow_name, fields)
     return flow
 
 
-def upload_addresses(access_token):
+def upload_addresses(access_token, telegram_id=None):
     try:
         flow = create_pizzerias_flow(access_token)
     except HTTPError:
@@ -66,6 +68,10 @@ def upload_addresses(access_token):
             'longitude': float(address['coordinates']['lon']),
             'latitude': float(address['coordinates']['lat']),
             }
+        if address.get('telegram_id'):
+            entry.update({'telegram_id': address['telegram_id']})
+        elif telegram_id:
+            entry.update({'telegram_id': int(telegram_id)})
 
         create_entries(access_token, flow['slug'], entry)
         print(f'Upload: {entry["alias"]} {entry["address"]}')
@@ -87,7 +93,10 @@ if __name__ == '__main__':
         upload_menu(access_token)
     elif args.addr:
         print('Try load address')
-        upload_addresses(access_token)
+        if args.tg_id:
+            upload_addresses(access_token, args.tg_id)
+        else:
+            upload_addresses(access_token)
     elif args.d:
         print('Delete data')
         products = fetch_products(access_token)

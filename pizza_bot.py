@@ -74,7 +74,7 @@ def build_main_menu(access_token, chat_id, products, start):
 
     items = get_cart_items(access_token, chat_id)
     if items:
-        keyboard.append([InlineKeyboardButton(f'Корзина ({len(items)})', callback_data='Корзина')])
+        keyboard.append([InlineKeyboardButton(f'Корзина ({len(items)} поз.)', callback_data='Корзина')])
 
     return keyboard
 
@@ -106,7 +106,7 @@ def build_product_menu(access_token, chat_id, product_id):
     keyboard.append([InlineKeyboardButton('Добавить в корзину', callback_data=product_id)])
     items = get_cart_items(access_token, chat_id)
     if items:
-        keyboard.append([InlineKeyboardButton(f'Корзина ({len(items)})', callback_data='Корзина')])
+        keyboard.append([InlineKeyboardButton(f'Корзина ({len(items)} поз.)', callback_data='Корзина')])
     keyboard.append([InlineKeyboardButton('Назад', callback_data='Назад')])
 
     return keyboard
@@ -279,23 +279,19 @@ def show_cart(update, context):
     return 'HANDLE_CART'
 
 
-def request_address(update, context):
+def request_info(update, context):
 
     if update.message:
         chat_id = update.message.chat_id
     elif update.callback_query:
         chat_id = update.callback_query.message.chat_id
 
-    keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
     context.bot.send_message(
         chat_id=chat_id,
-        text='Введите адрес доставки или отправьте местоположение.',
-        reply_markup=reply_markup
+        text='Введите адрес адрес электронной почты',
     )
 
-    return 'HANDLE_ADDRESS'
+    return 'HANDLE_EMAIL'
 
 
 def fetch_address(update, context):
@@ -328,13 +324,13 @@ def fetch_address(update, context):
 
         distances = [
             (
-                pizzeria['address'],
+                pizzeria,
                 round(distance(coords_address, (pizzeria['longitude'], pizzeria['latitude'])).km, 1)
             ) for pizzeria in pizzerias
         ]
 
-        nearest_pizzeria_address, nearest_pizzeria_distance = min(distances, key=lambda item: item[1])
-
+        nearest_pizzeria, nearest_pizzeria_distance = min(distances, key=lambda item: item[1])
+        nearest_pizzeria_address = nearest_pizzeria['address']
         if nearest_pizzeria_distance <= 0.5:
             text = dedent(f'''
                 Можете забрать пиццу из нашей пиццерии неподалеку?
@@ -359,8 +355,8 @@ def fetch_address(update, context):
 
         elif nearest_pizzeria_distance <= 20.0:
             text = dedent(f'''
-                Ближайшая к Вам пиццерия довольно далеко: {nearest_pizzeria_distance}. 
-                Доставка будет 300 рублей.
+                Ближайшая к Вам пиццерия довольно далеко: 
+                {nearest_pizzeria_distance} км. Доставка будет 300 рублей.
                 
                 Доставляем или самовывоз?
             ''')
@@ -377,7 +373,7 @@ def fetch_address(update, context):
             delivery_price = None
             delivery_option = False
 
-        context.user_data['delivery'] = (nearest_pizzeria_address, delivery_price)
+        context.user_data['delivery'] = (nearest_pizzeria, delivery_price)
 
         keyboard = [
             [InlineKeyboardButton('Доставка', callback_data='Доставка')],
@@ -395,21 +391,56 @@ def fetch_address(update, context):
         return 'HANDLE_DELIVERY'
 
 
-def echo_email(update, context):
+def fetch_email(update, context):
     email = update.message.text
-    access_token = update_token(context)
 
     if validate(email_address=email, check_format=True, check_blacklist=False, check_dns=False):
-        update.message.reply_text(text=f'Вы ввели адрес: {email}')
-        user = {
-            'name': str(update.message.chat_id),
-            'email': email
-        }
-        add_customer(access_token, user)
-        return 'PAYMENT'
+        keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+        update.message.reply_text(
+            text='Введите адрес доставки или отправьте местоположение.',
+            reply_markup=reply_markup
+        )
+        context.user_data['email'] = email
+        # user = {
+        #     'name': str(update.message.chat_id),
+        #     'email': email
+        # }
+        # add_customer(access_token, user)
+        return 'HANDLE_ADDRESS'
     else:
         update.message.reply_text(text=f'Адрес: {email} некорректный. Повторите ввод!')
-        return 'HANDLE_ADDRESS'
+        return 'HANDLE_EMAIL'
+
+
+def process_delivery(update, context):
+    pprint(context.user_data)
+
+
+def cancel(update, context):
+    text = dedent('''
+        Спасибо, что выбрали нашу компанию.
+
+        До новых встреч!
+    '''
+    )
+    reply_markup = ReplyKeyboardRemove()
+    if update.message:
+        chat_id = update.message.chat_id
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+    elif update.callback_query:
+        chat_id = update.callback_query.message.chat_id
+        query = update.callback_query
+
+        query.edit_message_text(
+            text=text,
+            reply_markup = reply_markup
+        )
 
 
 def handle_users_reply(update, context):
@@ -423,6 +454,8 @@ def handle_users_reply(update, context):
         return
     if user_reply == '/start':
         user_state = 'START'
+    elif user_reply == '/cancel':
+        user_state = 'CANCEL'
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
     elif user_reply == 'Оплатить':
@@ -436,9 +469,11 @@ def handle_users_reply(update, context):
         'HANDLE_MENU': product_detail,
         'HANDLE_DESCRIPTION': product_order,
         'HANDLE_CART': show_cart,
-        'HANDLE_PAYMENT': request_address,
+        'HANDLE_PAYMENT': request_info,
         'HANDLE_ADDRESS': fetch_address,
-        'HANDLE_EMAIL': echo_email
+        'HANDLE_EMAIL': fetch_email,
+        'HANDLE_DELIVERY': process_delivery,
+        'CANCEL': cancel
     }
     state_handler = states_functions[user_state]
 

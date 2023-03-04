@@ -335,7 +335,7 @@ def create_fields(access_token, flow_id, field_name, filed_type):
         'data': {
             'type': 'field',
             'name': field_name,
-            'slug': slugify(field_name),
+            'slug': field_name,
             'field_type': filed_type,
             'description': f'Field for {field_name}',
             'required': True,
@@ -358,6 +358,7 @@ def create_fields(access_token, flow_id, field_name, filed_type):
 
 def create_entries(access_token, flow_slug, entry):
     url = f'https://api.moltin.com/v2/flows/{flow_slug}/entries'
+
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
@@ -367,7 +368,7 @@ def create_entries(access_token, flow_slug, entry):
             'type': 'entry',
         }
     }
-    params['data'].update(**entry)
+    params['data'].update(entry)
 
     response = requests.post(url, headers=headers, json=params)
     response.raise_for_status()
