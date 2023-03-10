@@ -20,7 +20,8 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
 from shop_api import (
     fetch_products, get_product_by_id, client_credentials_access_token, take_product_image_description,
-    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, add_customer, fetch_entries
+    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, update_or_create_customer, fetch_entries,
+    get_entry
 )
 from pprint import pprint
 
@@ -59,10 +60,12 @@ def download_image(image_url, image_name):
     return response.ok
 
 
-def build_main_menu(access_token, chat_id, products, start):
+def build_main_menu(access_token, chat_id, start):
 
     with shelve.open('state') as db:
         db[f'{str(chat_id)}_start'] = start
+
+    products = fetch_products(access_token)
 
     keyboard = []
     for product in products[start:start + MENU_STEP]:
@@ -81,8 +84,10 @@ def build_main_menu(access_token, chat_id, products, start):
 
 def menu_pagination(access_token, query, chat_id):
     products = fetch_products(access_token)
+
     with shelve.open('state') as db:
         old_start = db[f'{str(chat_id)}_start']
+
     if query.data == 'next':
         new_start = old_start if (old_start + MENU_STEP) > len(products) else old_start + MENU_STEP
     else:
@@ -96,7 +101,7 @@ def menu_pagination(access_token, query, chat_id):
         else:
             query.answer('Начало списка')
     else:
-        keyboard = build_main_menu(access_token, chat_id, products, new_start)
+        keyboard = build_main_menu(access_token, chat_id, new_start)
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_reply_markup(reply_markup=reply_markup)
 
@@ -116,9 +121,9 @@ def start(update, context):
     access_token = update_token(context)
 
     chat_id = update.message.chat_id
+    context.user_data['chat_id'] = chat_id
 
-    products = fetch_products(access_token)
-    keyboard = build_main_menu(access_token, chat_id, products, start=0)
+    keyboard = build_main_menu(access_token, chat_id, start=0)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     update.message.reply_text(text='Выберите продукт:', reply_markup=reply_markup)
@@ -187,8 +192,7 @@ def product_order(update, context):
 
     if query.data == 'Назад':
 
-        products = fetch_products(access_token)
-        keyboard = build_main_menu(access_token, chat_id, products, 0)
+        keyboard = build_main_menu(access_token, chat_id, 0)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         context.bot.send_message(
@@ -225,8 +229,7 @@ def show_cart(update, context):
 
     if query.data == 'В меню':
 
-        products = fetch_products(access_token)
-        keyboard = build_main_menu(access_token, chat_id, products, 0)
+        keyboard = build_main_menu(access_token, chat_id, 0)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         context.bot.send_message(
@@ -247,10 +250,11 @@ def show_cart(update, context):
         item_id = query.data
         delete_item_from_cart(access_token, chat_id, item_id)
 
-    items = get_cart_items(access_token, chat_id)
-    cart = get_cart(access_token, chat_id)
-
     text = 'Ваша корзина: \n\n'
+
+    cart = get_cart(access_token, chat_id)
+    items = get_cart_items(access_token, chat_id)
+
     for item in items:
         price = item['meta']['display_price']['with_tax']['unit']['formatted']
         summa = item['meta']['display_price']['with_tax']['value']['formatted']
@@ -261,7 +265,7 @@ def show_cart(update, context):
 
     keyboard = []
     if items:
-        keyboard.append([InlineKeyboardButton('Оплатить', callback_data='Оплатить')])
+        keyboard.append([InlineKeyboardButton('Оформить заказ', callback_data='Оформить')])
     for item in items:
         keyboard.append(
             [InlineKeyboardButton(f'Убрать из корзины {item["name"]}', callback_data=item['id'])]
@@ -281,21 +285,44 @@ def show_cart(update, context):
 
 def request_info(update, context):
 
-    if update.message:
-        chat_id = update.message.chat_id
-    elif update.callback_query:
-        chat_id = update.callback_query.message.chat_id
+    query = update.callback_query
+    chat_id = query.message.chat_id
 
     context.bot.send_message(
         chat_id=chat_id,
-        text='Введите адрес адрес электронной почты',
+        text=dedent('''
+            Для оформления заказа нам нужна дополнительная информация:
+            
+            Введите адрес адрес электронной почты
+            '''
+        )
     )
 
     return 'HANDLE_EMAIL'
 
 
+def fetch_email(update, context):
+    email = update.message.text
+
+    if validate(email_address=email, check_format=True, check_blacklist=False, check_dns=False):
+        keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+        update.message.reply_text(
+            text='Введите адрес доставки или отправьте местоположение.',
+            reply_markup=reply_markup
+        )
+        context.user_data['email'] = email
+
+        return 'HANDLE_ADDRESS'
+    else:
+        update.message.reply_text(text=f'Адрес: {email} некорректный. Повторите ввод!')
+        return 'HANDLE_EMAIL'
+
+
 def fetch_address(update, context):
     api_key = context.bot_data['yandex_api_key']
+    access_token = update_token(context)
 
     if not update.message.text:
         location = update.message.location
@@ -319,7 +346,6 @@ def fetch_address(update, context):
         return 'HANDLE_ADDRESS'
 
     else:
-        access_token = update_token(context)
         pizzerias = fetch_entries(access_token, 'pizzerias')
 
         distances = [
@@ -373,14 +399,16 @@ def fetch_address(update, context):
             delivery_price = None
             delivery_option = False
 
-        context.user_data['delivery'] = (nearest_pizzeria, delivery_price)
+        context.user_data['pizzeria'] = nearest_pizzeria
+        context.user_data['delivery_price'] = delivery_price
+        context.user_data['delivery_address'] = coords_address
 
         keyboard = [
-            [InlineKeyboardButton('Доставка', callback_data='Доставка')],
+            [InlineKeyboardButton('Самовывоз', callback_data='Самовывоз')],
             [InlineKeyboardButton('Я передумал', callback_data='Отмена')]
         ]
         if delivery_option:
-            keyboard.insert(1, [InlineKeyboardButton('Самовывоз', callback_data='Самовывоз')])
+            keyboard.insert(0, [InlineKeyboardButton('Доставка', callback_data='Доставка')])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         update.message.reply_text(
@@ -388,37 +416,137 @@ def fetch_address(update, context):
             reply_markup=reply_markup
         )
 
-        return 'HANDLE_DELIVERY'
+        user = context.user_data
+        customer = {
+            'name': str(user['chat_id']),
+            'email': user['email'],
+            'longitude': float(user['delivery_address'][0]),
+            'latitude': float(user['delivery_address'][1])
+        }
+        update_or_create_customer(access_token, customer)
 
-
-def fetch_email(update, context):
-    email = update.message.text
-
-    if validate(email_address=email, check_format=True, check_blacklist=False, check_dns=False):
-        keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
-        update.message.reply_text(
-            text='Введите адрес доставки или отправьте местоположение.',
-            reply_markup=reply_markup
-        )
-        context.user_data['email'] = email
-        # user = {
-        #     'name': str(update.message.chat_id),
-        #     'email': email
-        # }
-        # add_customer(access_token, user)
-        return 'HANDLE_ADDRESS'
-    else:
-        update.message.reply_text(text=f'Адрес: {email} некорректный. Повторите ввод!')
-        return 'HANDLE_EMAIL'
+        return 'HANDLE_PAYMENT'
 
 
 def process_delivery(update, context):
-    pprint(context.user_data)
+    access_token = update_token(context)
+
+    query = update.callback_query
+    chat_id = query.message.chat_id
+
+    if query.data == 'Самовывоз':
+        pizzeria_address = context.user_data['pizzeria']['address']
+        text = dedent(
+            f'''
+            Ваша пицца будет ждать Вас по адресу:
+            {pizzeria_address}
+
+            Приятного аппетита!
+            '''
+        )
+        reply_markup = ReplyKeyboardRemove()
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+
+        return 'HANDLE_MENU'
+
+    elif query.data == 'Отмена':
+        context.user_data['chat_id'] = chat_id
+
+        keyboard = build_main_menu(access_token, chat_id, start=0)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        query.edit_message_text(text='Выберите продукт:', reply_markup=reply_markup)
+
+        return 'HANDLE_MENU'
+
+    else:
+        cart= get_cart(access_token, chat_id)
+
+        cart_summa = cart['meta']['display_price']['with_tax']['amount']
+        delivery_price = context.user_data['delivery_price']
+        total = cart_summa + delivery_price
+
+        pizzeria = context.user_data['pizzeria']
+        lon, lat = context.user_data['delivery_address']
+
+        # Уведомления пользователя
+        text = dedent(
+            f'''
+            Ваша заказ передан в доставку
+            Пицца будет доставлена в течение 1 часа!
+            
+            Сумма к оплате: {total} руб.
+            '''
+        )
+        reply_markup = ReplyKeyboardRemove()
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+
+        # Отправка заказа в службу доставки ресторана
+        text = dedent(
+            f'''
+            Новая доставка:
+            тут будет перечисление заказа
+
+            Сумма к оплате: {total} руб.
+            '''
+        )
+        reply_markup = ReplyKeyboardRemove()
+        context.bot.send_message(
+            chat_id=pizzeria['telegram_id'],
+            text=text,
+            reply_markup=reply_markup
+        )
+        context.bot.send_location(
+            chat_id=pizzeria['telegram_id'],
+            latitude=lat,
+            longitude=lon
+        )
+        context.job_queue.run_once(feedback, 60, context=chat_id)
+
+        return 'HANDLE_PAYMENT'
+
+
+def feedback(context):
+
+    context.bot.send_message(
+        chat_id=context.job.context,
+        text=dedent(
+            '''
+            Приятного аппетита! *место для рекламы*
+
+            *сообщение что делать если пицца не пришла*           
+            '''
+        ),
+    )
+
+
+def precheckout_callback(update, context):
+    query = update.pre_checkout_query
+    if query.invoice_payload != 'Custom-Payload':
+        query.answer(ok=False, error_message="Что-то пошло не так...")
+    else:
+        query.answer(ok=True)
+
+
+def successful_payment_callback(update, context):
+
+        update.message.reply_text("Спасибо за оплату!")
 
 
 def cancel(update, context):
+    if update.message:
+        chat_id = update.message.chat_id
+    elif update.callback_query:
+        chat_id = update.callback_query.message.chat_id
+
     text = dedent('''
         Спасибо, что выбрали нашу компанию.
 
@@ -426,21 +554,12 @@ def cancel(update, context):
     '''
     )
     reply_markup = ReplyKeyboardRemove()
-    if update.message:
-        chat_id = update.message.chat_id
-        context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup
-        )
-    elif update.callback_query:
-        chat_id = update.callback_query.message.chat_id
-        query = update.callback_query
 
-        query.edit_message_text(
-            text=text,
-            reply_markup = reply_markup
-        )
+    context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup
+    )
 
 
 def handle_users_reply(update, context):
@@ -458,8 +577,8 @@ def handle_users_reply(update, context):
         user_state = 'CANCEL'
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
-    elif user_reply == 'Оплатить':
-        user_state = 'HANDLE_PAYMENT'
+    elif user_reply == 'Оформить':
+        user_state = 'REQUEST_INFO'
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
@@ -469,11 +588,11 @@ def handle_users_reply(update, context):
         'HANDLE_MENU': product_detail,
         'HANDLE_DESCRIPTION': product_order,
         'HANDLE_CART': show_cart,
-        'HANDLE_PAYMENT': request_info,
+        'REQUEST_INFO': request_info,
         'HANDLE_ADDRESS': fetch_address,
         'HANDLE_EMAIL': fetch_email,
-        'HANDLE_DELIVERY': process_delivery,
-        'CANCEL': cancel
+        'HANDLE_PAYMENT': process_delivery,
+        'CANCEL': cancel,
     }
     state_handler = states_functions[user_state]
 
@@ -527,7 +646,7 @@ if __name__ == '__main__':
         'yandex_api_key': yandex_api_key
     }
 
-    dispatcher.add_handler(CallbackQueryHandler(handle_users_reply))
+    dispatcher.add_handler(CallbackQueryHandler(handle_users_reply, pass_job_queue=True))
     dispatcher.add_handler(MessageHandler(Filters.text, handle_users_reply))
     dispatcher.add_handler(MessageHandler(Filters.location, handle_users_reply))
     dispatcher.add_handler(CommandHandler('start', handle_users_reply))

@@ -7,8 +7,10 @@ from shop_api import (
     client_credentials_access_token,
     create_product,
     fetch_products,
+    fetch_flows,
     delete_product,
     delete_files,
+    delete_flow,
     create_flow,
     create_entries
 )
@@ -39,7 +41,7 @@ def upload_menu(access_token):
 
 
 def create_pizzerias_flow(access_token):
-    flow_name = 'Pizzerias'
+    flow = ('Pizzerias', 'pizzerias', 'Flow for pizzerias data')
     fields = {
         'address': 'string',
         'alias': 'string',
@@ -47,7 +49,7 @@ def create_pizzerias_flow(access_token):
         'latitude': 'float',
         'telegram_id': 'integer'
     }
-    flow = create_flow(access_token, flow_name, fields)
+    flow = create_flow(access_token, flow, fields)
     return flow
 
 

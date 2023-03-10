@@ -179,7 +179,32 @@ def get_customers(access_token):
     return response.json()['data']
 
 
-def add_customer(access_token, user):
+def update_or_create_customer(access_token, customer):
+    filtered_customer = fetch_customer_by_email(access_token, customer['email'])
+    if filtered_customer:
+        update_customer(access_token, filtered_customer[0]['id'], customer)
+    else:
+        add_customer(access_token, customer)
+
+
+def fetch_customer_by_email(access_token, user_email):
+    url_api = 'https://api.moltin.com/v2/customers'
+
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+    }
+
+    params = {
+        'filter': f'eq(email,{user_email})'
+    }
+
+    response = requests.get(url_api, headers=headers, params=params)
+    response.raise_for_status()
+
+    return response.json()['data']
+
+
+def add_customer(access_token, customer):
     url = f'https://api.moltin.com/v2/customers'
     headers = {
         'Authorization': f'Bearer {access_token}',
@@ -190,9 +215,28 @@ def add_customer(access_token, user):
             'type': 'customer',
         }
     }
-    params['data'].update(user)
+    params['data'].update(customer)
 
     response = requests.post(url, headers=headers, json=params)
+    response.raise_for_status()
+
+    return response.json()
+
+
+def update_customer(access_token, customer_id, customer):
+    url = f'https://api.moltin.com/v2/customers/{customer_id}'
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+    params = {
+        'data': {
+            'type': 'customer',
+        }
+    }
+    params['data'].update(customer)
+
+    response = requests.put(url, headers=headers, json=params)
     response.raise_for_status()
 
     return response.json()
@@ -297,8 +341,9 @@ def delete_files(access_token):
         print(f'Deleted: {file["id"]}')
 
 
-def create_flow(access_token, flow_name, fields):
+def create_flow(access_token, flow, fields):
     url = 'https://api.moltin.com/v2/flows'
+    flow_name, flow_slug, flow_description = flow
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
@@ -307,8 +352,8 @@ def create_flow(access_token, flow_name, fields):
         'data': {
             'type': 'flow',
             'name': flow_name,
-            'slug': slugify(flow_name),
-            'description': f'New model for {flow_name}',
+            'slug': flow_slug,
+            'description': flow_description,
             'enabled': True,
         }
     }
@@ -325,6 +370,30 @@ def create_flow(access_token, flow_name, fields):
     return flow
 
 
+def fetch_flows(access_token):
+    url = 'https://api.moltin.com/v2/flows'
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+
+    return response.json()['data']
+
+
+def delete_flow(access_token, flow_id):
+    url = f'https://api.moltin.com/v2/flows/{flow_id}'
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    response = requests.delete(url, headers=headers)
+    response.raise_for_status()
+
+
 def create_fields(access_token, flow_id, field_name, filed_type):
     url = 'https://api.moltin.com/v2/fields'
     headers = {
@@ -338,7 +407,7 @@ def create_fields(access_token, flow_id, field_name, filed_type):
             'slug': field_name,
             'field_type': filed_type,
             'description': f'Field for {field_name}',
-            'required': True,
+            'required': False,
             'enabled': True,
             'relationships': {
                 'flow': {
@@ -390,6 +459,21 @@ def fetch_entries(access_token, flow_slug):
     return response.json()['data']
 
 
+def get_entry(access_token, flow_slug, entry_id):
+    url_api = f'https://api.moltin.com/v2/flows/{flow_slug}/entries/{entry_id}'
+
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    response = requests.get(url_api, headers=headers)
+    response.raise_for_status()
+
+    return response.json()['data']
+
+
+
 if __name__ == '__main__':
 
     env = Env()
@@ -401,10 +485,4 @@ if __name__ == '__main__':
     token = client_credentials_access_token(client_id, client_secret)
 
     access_token = token['access_token']
-    pprint(fetch_entries(access_token, 'pizzerias'))
 
-    #
-    # products = fetch_products(access_token)
-    # for product in products:
-    #     # print(product['id'])
-    #     delete_product(access_token, product['id'])
