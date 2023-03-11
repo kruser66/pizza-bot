@@ -227,8 +227,8 @@ def product_order(update, context):
 def show_cart(update, context):
     access_token = update_token(context)
     query = update.callback_query
-    query.answer()
     chat_id = query.message.chat_id
+    query.answer()
 
     if query.data == 'В меню':
 
@@ -249,6 +249,21 @@ def show_cart(update, context):
 
     elif query.data == 'Корзина':
         pass
+    elif query.data == 'Оформить':
+
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=dedent(
+                '''
+                Для оформления заказа нам нужна дополнительная информация:
+
+                Введите адрес адрес электронной почты
+                '''
+            )
+        )
+
+        return 'HANDLE_EMAIL'
+
     else:
         item_id = query.data
         delete_item_from_cart(access_token, chat_id, item_id)
@@ -284,25 +299,6 @@ def show_cart(update, context):
     )
 
     return 'HANDLE_CART'
-
-
-def request_info(update, context):
-
-    query = update.callback_query
-    chat_id = query.message.chat_id
-
-    context.bot.send_message(
-        chat_id=chat_id,
-        text=dedent(
-            '''
-            Для оформления заказа нам нужна дополнительная информация:
-            
-            Введите адрес адрес электронной почты
-            '''
-        )
-    )
-
-    return 'HANDLE_EMAIL'
 
 
 def fetch_email(update, context):
@@ -574,7 +570,22 @@ def start_payment_callback(update, context):
         )
 
     else:
-        return 'CANCEL'
+        text = dedent(
+            '''
+            Спасибо, что выбрали нашу компанию.
+
+            До новых встреч!
+            '''
+        )
+        reply_markup = ReplyKeyboardRemove()
+
+        context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+
+        return 'START'
 
 
 def precheckout_callback(update, context):
@@ -627,8 +638,6 @@ def handle_users_reply(update, context):
         user_state = 'CANCEL'
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
-    elif user_reply == 'Оформить':
-        user_state = 'REQUEST_INFO'
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
@@ -638,7 +647,6 @@ def handle_users_reply(update, context):
         'HANDLE_MENU': product_detail,
         'HANDLE_DESCRIPTION': product_order,
         'HANDLE_CART': show_cart,
-        'REQUEST_INFO': request_info,
         'HANDLE_ADDRESS': fetch_address,
         'HANDLE_EMAIL': fetch_email,
         'HANDLE_PAYMENT': process_delivery,
