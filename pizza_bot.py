@@ -469,8 +469,21 @@ def process_delivery(update, context):
 
     else:
         cart = get_cart(access_token, chat_id)
+        items = get_cart_items(access_token, chat_id)
+        display_text = ''
+        for item in items:
+            price = item['meta']['display_price']['with_tax']['unit']['formatted']
+            summa = item['meta']['display_price']['with_tax']['value']['formatted']
+            display_text += dedent(
+                f'''
+                {item["name"]}
+                {item["quantity"]} шт. по цене: {price} на сумму: {summa}
+                
+                '''
+            )
 
         cart_summa = cart['meta']['display_price']['with_tax']['amount']
+
         delivery_price = context.user_data['delivery_price']
         total = cart_summa + delivery_price
 
@@ -506,9 +519,12 @@ def process_delivery(update, context):
             (Уведомления курьерам)
             
             Новая доставка:
-            тут будет перечисление заказа
+            {display_text}
 
-            Сумма к оплате: {total} руб.
+            Сумма заказа: {cart_summa} руб.
+            Стоимость доставки: {delivery_price} руб.
+            ----------------------------------
+            Итого: {total} руб.
             '''
         )
         context.bot.send_message(
