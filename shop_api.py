@@ -1,8 +1,6 @@
-import json
 import requests
 from slugify import slugify
 from environs import Env
-from pprint import pprint
 
 
 API_BASE_URL = 'https://api.moltin.com/v2'
@@ -473,7 +471,6 @@ def get_entry(access_token, flow_slug, entry_id):
     return response.json()['data']
 
 
-
 if __name__ == '__main__':
 
     env = Env()
@@ -485,4 +482,3 @@ if __name__ == '__main__':
     token = client_credentials_access_token(client_id, client_secret)
 
     access_token = token['access_token']
-

@@ -6,6 +6,7 @@ from textwrap import dedent
 from datetime import datetime
 from environs import Env
 from geopy.distance import distance
+from geopy import Yandex
 from email_validate import validate
 from urllib.parse import unquote, urlparse
 from telegram import (
@@ -13,17 +14,16 @@ from telegram import (
     InlineKeyboardButton,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove
+    ReplyKeyboardRemove,
+    LabeledPrice
 )
 from telegram.ext import Filters, Updater
-from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
+from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler
 
 from shop_api import (
     fetch_products, get_product_by_id, client_credentials_access_token, take_product_image_description,
-    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, update_or_create_customer, fetch_entries,
-    get_entry
+    add_product_to_cart, delete_item_from_cart, get_cart_items, get_cart, update_or_create_customer, fetch_entries
 )
-from pprint import pprint
 
 
 logger = logging.getLogger(__name__)
@@ -33,22 +33,23 @@ MENU_STEP = 7
 
 
 def fetch_coordinates(apikey, address):
-    base_url = "https://geocode-maps.yandex.ru/1.x"
-    response = requests.get(base_url, params={
-        "geocode": address,
-        "apikey": apikey,
-        "format": "json",
-    })
-    response.raise_for_status()
 
-    found_places = response.json()['response']['GeoObjectCollection']['featureMember']
-    if not found_places:
+    yandex_geocoder = Yandex(apikey)
+    try:
+        location = yandex_geocoder.geocode(address)
+    except requests.exceptions.HTTPError:
         return None
 
-    most_relevant = found_places[0]
-    lon, lat = most_relevant['GeoObject']['Point']['pos'].split(" ")
+    if location:
+        lat = location.latitude
+        lon = location.longitude
 
-    return lon, lat
+        return lat, lon
+
+
+def calculate_distance(address_location, pizzeria_location):
+
+    return round(distance(address_location, pizzeria_location).km, 1)
 
 
 def download_image(image_url, image_name):
@@ -72,7 +73,10 @@ def build_main_menu(access_token, chat_id, start):
         keyboard.append([InlineKeyboardButton(product['name'], callback_data=product['id'])])
 
     keyboard.append(
-            [InlineKeyboardButton(' << ', callback_data='prev'), InlineKeyboardButton(' >> ', callback_data='next')],
+            [
+                InlineKeyboardButton(' << ', callback_data='previous'),
+                InlineKeyboardButton(' >> ', callback_data='next')
+            ],
     )
 
     items = get_cart_items(access_token, chat_id)
@@ -136,7 +140,7 @@ def product_detail(update, context):
     query = update.callback_query
     chat_id = query.message.chat_id
 
-    if query.data in ['next', 'prev']:
+    if query.data in ['next', 'previous']:
         menu_pagination(access_token, query, chat_id)
         return 'HANDLE_MENU'
 
@@ -184,7 +188,6 @@ def product_detail(update, context):
 
 def product_order(update, context):
     access_token = update_token(context)
-    product_id = context.user_data['product_id']
     query = update.callback_query
 
     chat_id = query.message.chat_id
@@ -290,7 +293,8 @@ def request_info(update, context):
 
     context.bot.send_message(
         chat_id=chat_id,
-        text=dedent('''
+        text=dedent(
+            '''
             Для оформления заказа нам нужна дополнительная информация:
             
             Введите адрес адрес электронной почты
@@ -325,13 +329,12 @@ def fetch_address(update, context):
     access_token = update_token(context)
 
     if not update.message.text:
-        location = update.message.location
-        coords_address = (location['longitude'], location['latitude'])
+        address_location = (update.message.location['latitude'], update.message.location['longitude'])
     else:
         address_text = update.message.text
-        coords_address = fetch_coordinates(api_key, address_text)
+        address_location = fetch_coordinates(api_key, address_text)
 
-    if not coords_address:
+    if not address_location:
         keyboard = [[KeyboardButton('Отправить местоположение', request_location=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
@@ -351,41 +354,47 @@ def fetch_address(update, context):
         distances = [
             (
                 pizzeria,
-                round(distance(coords_address, (pizzeria['longitude'], pizzeria['latitude'])).km, 1)
+                calculate_distance(address_location, (pizzeria['latitude'], pizzeria['longitude']))
             ) for pizzeria in pizzerias
         ]
 
         nearest_pizzeria, nearest_pizzeria_distance = min(distances, key=lambda item: item[1])
         nearest_pizzeria_address = nearest_pizzeria['address']
         if nearest_pizzeria_distance <= 0.5:
-            text = dedent(f'''
+            text = dedent(
+                f'''
                 Можете забрать пиццу из нашей пиццерии неподалеку?
 
                 Она всего {int(nearest_pizzeria_distance*1000)} метрах от Вас.
                 Вот ее адрес: {nearest_pizzeria_address}.
                 
                 А можем и бесплатно доставить - нам не сложно.
-            ''')
+                '''
+            )
             delivery_option = True
             delivery_price = 0
 
         elif nearest_pizzeria_distance <= 5.0:
-            text = dedent(f'''
+            text = dedent(
+                f'''
                 О, Вы не так далеко. Ближайшая пиццерия находится по адресу: {nearest_pizzeria_address}
                 Доставка будет стоить 100 рублей.
 
                 Доставляем или самовывоз?
-            ''')
+                '''
+            )
             delivery_option = True
             delivery_price = 100
 
         elif nearest_pizzeria_distance <= 20.0:
-            text = dedent(f'''
+            text = dedent(
+                f'''
                 Ближайшая к Вам пиццерия довольно далеко: 
                 {nearest_pizzeria_distance} км. Доставка будет 300 рублей.
                 
                 Доставляем или самовывоз?
-            ''')
+                '''
+            )
             delivery_option = True
             delivery_price = 300
 
@@ -401,7 +410,7 @@ def fetch_address(update, context):
 
         context.user_data['pizzeria'] = nearest_pizzeria
         context.user_data['delivery_price'] = delivery_price
-        context.user_data['delivery_address'] = coords_address
+        context.user_data['delivery_address'] = address_location
 
         keyboard = [
             [InlineKeyboardButton('Самовывоз', callback_data='Самовывоз')],
@@ -444,14 +453,13 @@ def process_delivery(update, context):
             Приятного аппетита!
             '''
         )
-        reply_markup = ReplyKeyboardRemove()
+
         context.bot.send_message(
             chat_id=chat_id,
             text=text,
-            reply_markup=reply_markup
         )
 
-        return 'HANDLE_MENU'
+        return 'CANCEL'
 
     elif query.data == 'Отмена':
         context.user_data['chat_id'] = chat_id
@@ -464,14 +472,14 @@ def process_delivery(update, context):
         return 'HANDLE_MENU'
 
     else:
-        cart= get_cart(access_token, chat_id)
+        cart = get_cart(access_token, chat_id)
 
         cart_summa = cart['meta']['display_price']['with_tax']['amount']
         delivery_price = context.user_data['delivery_price']
         total = cart_summa + delivery_price
 
         pizzeria = context.user_data['pizzeria']
-        lon, lat = context.user_data['delivery_address']
+        lat, lon = context.user_data['delivery_address']
 
         # Уведомления пользователя
         text = dedent(
@@ -479,10 +487,17 @@ def process_delivery(update, context):
             Ваша заказ передан в доставку
             Пицца будет доставлена в течение 1 часа!
             
-            Сумма к оплате: {total} руб.
+            Сумма заказа: {cart_summa} руб.
+            Стоимость доставки: {delivery_price} руб.
+            ----------------------------------
+            Итого: {total} руб.
             '''
         )
-        reply_markup = ReplyKeyboardRemove()
+        keyboard = [
+            [InlineKeyboardButton('Оплатить онлайн', callback_data='Оплатить')],
+            [InlineKeyboardButton('Оплачу курьеру наличными', callback_data='Наличные')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         context.bot.send_message(
             chat_id=chat_id,
             text=text,
@@ -492,26 +507,30 @@ def process_delivery(update, context):
         # Отправка заказа в службу доставки ресторана
         text = dedent(
             f'''
+            (Уведомления курьерам)
+            
             Новая доставка:
             тут будет перечисление заказа
 
             Сумма к оплате: {total} руб.
             '''
         )
-        reply_markup = ReplyKeyboardRemove()
         context.bot.send_message(
-            chat_id=pizzeria['telegram_id'],
+            chat_id=-1001896820954,  # тестовая отправка в группу
+            # chat_id=pizzeria['telegram_id'],  # отправка в ресторан в productions
             text=text,
-            reply_markup=reply_markup
         )
+
         context.bot.send_location(
-            chat_id=pizzeria['telegram_id'],
+            chat_id=-1001896820954,  # тестовая отправка в группу
+            # chat_id=pizzeria['telegram_id'],  # отправка в ресторан в productions
             latitude=lat,
             longitude=lon
         )
+        context.user_data['total'] = total
         context.job_queue.run_once(feedback, 60, context=chat_id)
 
-        return 'HANDLE_PAYMENT'
+        return 'START_PAYMENT'
 
 
 def feedback(context):
@@ -520,12 +539,42 @@ def feedback(context):
         chat_id=context.job.context,
         text=dedent(
             '''
+            (Уведомление для feedback как бы через час)
+            
             Приятного аппетита! *место для рекламы*
 
             *сообщение что делать если пицца не пришла*           
             '''
         ),
     )
+
+
+def start_payment_callback(update, context):
+
+    query = update.callback_query
+    chat_id = query.message.chat_id
+
+    if query.data == 'Оплатить':
+
+        payment_provider_token = context.bot_data['payment_provider_token']
+
+        title = 'Payment Example'
+        description = 'Оплата заказа пиццы'
+        payload = 'Custom-Payload'
+        currency = "RUB"
+
+        price = context.user_data['total']
+        # price * 100 so as to include 2 decimal points
+        prices = [LabeledPrice("Test", price * 100)]
+
+        # optionally pass need_name=True, need_phone_number=True,
+        # need_email=True, need_shipping_address=True, is_flexible=True
+        context.bot.send_invoice(
+            chat_id, title, description, payload, payment_provider_token, currency, prices
+        )
+
+    else:
+        return 'CANCEL'
 
 
 def precheckout_callback(update, context):
@@ -538,7 +587,7 @@ def precheckout_callback(update, context):
 
 def successful_payment_callback(update, context):
 
-        update.message.reply_text("Спасибо за оплату!")
+    update.message.reply_text("Спасибо за оплату!")
 
 
 def cancel(update, context):
@@ -547,11 +596,12 @@ def cancel(update, context):
     elif update.callback_query:
         chat_id = update.callback_query.message.chat_id
 
-    text = dedent('''
+    text = dedent(
+        '''
         Спасибо, что выбрали нашу компанию.
 
         До новых встреч!
-    '''
+        '''
     )
     reply_markup = ReplyKeyboardRemove()
 
@@ -577,8 +627,8 @@ def handle_users_reply(update, context):
         user_state = 'CANCEL'
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
-    elif user_reply == 'Оформить':
-        user_state = 'REQUEST_INFO'
+    # elif user_reply == 'Оформить':
+    #     user_state = 'REQUEST_INFO'
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
@@ -593,6 +643,7 @@ def handle_users_reply(update, context):
         'HANDLE_EMAIL': fetch_email,
         'HANDLE_PAYMENT': process_delivery,
         'CANCEL': cancel,
+        'START_PAYMENT': start_payment_callback
     }
     state_handler = states_functions[user_state]
 
@@ -634,6 +685,7 @@ if __name__ == '__main__':
     motlin_token = client_credentials_access_token(client_id, client_secret)
 
     yandex_api_key = env.str('YANDEX_GEOCODER_API_KEY')
+    payment_provider_token = env.str('PAYMENT_PROVIDER_TOKEN')
 
     token = env.str('TG_TOKEN')
     updater = Updater(token=token, use_context=True)
@@ -643,9 +695,12 @@ if __name__ == '__main__':
         'token': motlin_token,
         'client_id': client_id,
         'client_secret': client_secret,
-        'yandex_api_key': yandex_api_key
+        'yandex_api_key': yandex_api_key,
+        'payment_provider_token': payment_provider_token
     }
 
+    dispatcher.add_handler(MessageHandler(Filters.successful_payment, successful_payment_callback))
+    dispatcher.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     dispatcher.add_handler(CallbackQueryHandler(handle_users_reply, pass_job_queue=True))
     dispatcher.add_handler(MessageHandler(Filters.text, handle_users_reply))
     dispatcher.add_handler(MessageHandler(Filters.location, handle_users_reply))

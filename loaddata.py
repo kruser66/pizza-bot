@@ -2,15 +2,12 @@ import json
 import argparse
 from environs import Env
 from requests.exceptions import HTTPError
-from pprint import pprint
 from shop_api import (
     client_credentials_access_token,
     create_product,
     fetch_products,
-    fetch_flows,
     delete_product,
     delete_files,
-    delete_flow,
     create_flow,
     create_entries
 )

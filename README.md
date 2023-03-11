@@ -39,6 +39,10 @@ TG_TOKEN='YOUR_TELEGRAM_BOT_TOKEN'
 ```bash
 YANDEX_GEOCODER_API_KEY='YANDEX_GEOCODER_API_KEY'
 ```
+- для реализации оплаты через Telegram понадобится 
+```bash
+PAYMENT_PROVIDER_TOKEN='YOUR_TOKEN'
+```
 
 ## Запуск модуля
 
