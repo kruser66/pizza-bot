@@ -56,20 +56,20 @@ python pizza_bot.py
 
 - Загрузка списка товаров:
 ```bash
-python example -m menu.json
+python loaddata.py -m menu.json
 ```
 - Загрузка адресов пиццерий (адреса можно дополнить ключом `telegram_id` для работы уведомлений):
 ```bash
-python example -a addresses.json
+python loaddata.py -a addresses.json
 ```
 Для тестирования доставки уведомлений используйте свой номер `telegram_id` и параметр `-tg`
 ```bash
-python example -a addresses.json -tg 123456789
+python loaddata.py -a addresses.json -tg 123456789
 ```
 - 
 - Удаление справочников из базы
 ```bash
-python example -d
+python loaddata.py -d
 ```
 
 # Цель проекта
