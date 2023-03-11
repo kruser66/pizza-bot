@@ -627,8 +627,8 @@ def handle_users_reply(update, context):
         user_state = 'CANCEL'
     elif user_reply == 'Корзина':
         user_state = 'HANDLE_CART'
-    # elif user_reply == 'Оформить':
-    #     user_state = 'REQUEST_INFO'
+    elif user_reply == 'Оформить':
+        user_state = 'REQUEST_INFO'
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
