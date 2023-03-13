@@ -47,11 +47,6 @@ def fetch_coordinates(apikey, address):
         return lat, lon
 
 
-def calculate_distance(address_location, pizzeria_location):
-
-    return round(distance(address_location, pizzeria_location).km, 1)
-
-
 def download_image(image_url, image_name):
     response = requests.get(image_url)
     if response.ok:
@@ -224,6 +219,45 @@ def product_order(update, context):
         return 'HANDLE_DESCRIPTION'
 
 
+def display_cart(update, context):
+    access_token = update_token(context)
+    query = update.callback_query
+
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+    text = 'Ваша корзина: \n\n'
+
+    cart = get_cart(access_token, chat_id)
+    items = get_cart_items(access_token, chat_id)
+
+    for item in items:
+        price = item['meta']['display_price']['with_tax']['unit']['formatted']
+        summa = item['meta']['display_price']['with_tax']['value']['formatted']
+        text += f'{item["name"]}\n{item["quantity"]} шт. по цене: {price} на сумму: {summa}\n\n'
+
+    total = cart['meta']['display_price']['with_tax']['formatted']
+    text += f'Общая сумму заказа: {total}'
+
+    keyboard = []
+    if items:
+        keyboard.append([InlineKeyboardButton('Оформить заказ', callback_data='Оформить')])
+    for item in items:
+        keyboard.append(
+            [InlineKeyboardButton(f'Убрать из корзины {item["name"]}', callback_data=item['id'])]
+        )
+    keyboard.append([InlineKeyboardButton('В меню', callback_data='В меню')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
+    context.bot.delete_message(
+        chat_id=chat_id,
+        message_id=message_id
+    )
+
+    return 'HANDLE_CART'
+
+
 def show_cart(update, context):
     access_token = update_token(context)
     query = update.callback_query
@@ -268,35 +302,7 @@ def show_cart(update, context):
         item_id = query.data
         delete_item_from_cart(access_token, chat_id, item_id)
 
-    text = 'Ваша корзина: \n\n'
-
-    cart = get_cart(access_token, chat_id)
-    items = get_cart_items(access_token, chat_id)
-
-    for item in items:
-        price = item['meta']['display_price']['with_tax']['unit']['formatted']
-        summa = item['meta']['display_price']['with_tax']['value']['formatted']
-        text += f'{item["name"]}\n{item["quantity"]} шт. по цене: {price} на сумму: {summa}\n\n'
-
-    total = cart['meta']['display_price']['with_tax']['formatted']
-    text += f'Общая сумму заказа: {total}'
-
-    keyboard = []
-    if items:
-        keyboard.append([InlineKeyboardButton('Оформить заказ', callback_data='Оформить')])
-    for item in items:
-        keyboard.append(
-            [InlineKeyboardButton(f'Убрать из корзины {item["name"]}', callback_data=item['id'])]
-        )
-    keyboard.append([InlineKeyboardButton('В меню', callback_data='В меню')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
-
-    context.bot.delete_message(
-        chat_id=query.message.chat_id,
-        message_id=query.message.message_id
-    )
+    display_cart(update, context)
 
     return 'HANDLE_CART'
 
@@ -350,7 +356,7 @@ def fetch_address(update, context):
         distances = [
             (
                 pizzeria,
-                calculate_distance(address_location, (pizzeria['latitude'], pizzeria['longitude']))
+                round(distance(address_location, (pizzeria['latitude'], pizzeria['longitude'])).km, 1)
             ) for pizzeria in pizzerias
         ]
 
@@ -528,14 +534,12 @@ def process_delivery(update, context):
             '''
         )
         context.bot.send_message(
-            chat_id=-1001896820954,  # тестовая отправка в группу
-            # chat_id=pizzeria['telegram_id'],  # отправка в ресторан в productions
+            chat_id=-1001896820954,  # тестовая отправка в группу (chat_id=pizzeria['telegram_id'])
             text=text,
         )
 
         context.bot.send_location(
-            chat_id=-1001896820954,  # тестовая отправка в группу
-            # chat_id=pizzeria['telegram_id'],  # отправка в ресторан в productions
+            chat_id=-1001896820954,
             latitude=lat,
             longitude=lon
         )
