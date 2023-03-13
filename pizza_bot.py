@@ -139,6 +139,11 @@ def product_detail(update, context):
         menu_pagination(access_token, query, chat_id)
         return 'HANDLE_MENU'
 
+    if query.data == 'Корзина':
+        display_cart(update, context)
+
+        return 'HANDLE_CART'
+
     product_id = query.data
     context.user_data['product_id'] = product_id
 
@@ -204,6 +209,11 @@ def product_order(update, context):
         )
 
         return 'HANDLE_MENU'
+
+    elif query.data == 'Корзина':
+        display_cart(update, context)
+
+        return 'HANDLE_CART'
 
     else:
         product_id = query.data
@@ -656,8 +666,7 @@ def handle_users_reply(update, context):
         user_state = 'START'
     elif user_reply == '/cancel':
         user_state = 'CANCEL'
-    elif user_reply == 'Корзина':
-        user_state = 'HANDLE_CART'
+
     else:
         with shelve.open('state') as db:
             user_state = db[str(chat_id)]
